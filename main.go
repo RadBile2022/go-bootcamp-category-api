@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"go-boot-category-api/database"
 	"go-boot-category-api/framework/handler"
 	"go-boot-category-api/framework/repository"
@@ -12,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )
 
@@ -21,8 +21,17 @@ type Config struct {
 }
 
 func main() {
+	// Load .env file untuk development
+	if err := godotenv.Load(); err != nil {
+		log.Println("Warning: .env file not found, using environment variables")
+	}
+
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Set default values
+	viper.SetDefault("PORT", "8080")
+	viper.SetDefault("DB_CONN", "host=localhost port=5432 user=postgres password=postgres dbname=mydb sslmode=disable")
 
 	if _, err := os.Stat(".env"); err == nil {
 		viper.SetConfigFile(".env")
@@ -34,8 +43,17 @@ func main() {
 		DBConn: viper.GetString("DB_CONN"),
 	}
 
-	// Setup database
-	db, err := database.InitDB(config.DBConn)
+	// DEBUG: Print config (hapus di production)
+	log.Printf("Config - Port: %s", config.Port)
+	log.Printf("Config - DB_CONN: %s", maskDBConn(config.DBConn))
+
+	// Setup database dengan environment variable
+	// Set DB_CONN ke environment variable agar database.InitDB() bisa baca
+	if config.DBConn != "" {
+		os.Setenv("DB_CONN", config.DBConn)
+	}
+
+	db, err := database.InitDB()
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
@@ -56,7 +74,7 @@ func main() {
 	http.HandleFunc("/api/categories", categoryHandler.HandleCategories)
 	http.HandleFunc("/api/categories/", categoryHandler.HandleCategoryByID)
 
-	// localhost:8080/health
+	// Health check endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -64,10 +82,26 @@ func main() {
 			"message": "API Running",
 		})
 	})
-	fmt.Println("Server running di localhost:" + config.Port)
 
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Welcome to Category API",
+			"docs":    "/api/products, /api/categories",
+		})
+	})
+
+	log.Printf("Server running on port %s", config.Port)
 	err = http.ListenAndServe(":"+config.Port, nil)
 	if err != nil {
-		fmt.Println("gagal running server")
+		log.Fatal("Failed to start server:", err)
 	}
+}
+
+// Helper function untuk mask password di logs
+func maskDBConn(conn string) string {
+	if len(conn) < 20 {
+		return "***"
+	}
+	return conn[:20] + "..."
 }

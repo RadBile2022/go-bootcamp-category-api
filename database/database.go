@@ -1,36 +1,54 @@
 package database
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"log"
+	"os"
+	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func InitDB(connectionString string) (*sql.DB, error) {
-	// Parse config dari connection string
-	config, err := pgx.ParseConfig(connectionString)
-	if err != nil {
-		return nil, err
+func InitDB() (*sql.DB, error) {
+	// Ambil dari env var
+	connStr := os.Getenv("DB_CONN")
+	if connStr == "" {
+		return nil, fmt.Errorf("DB_CONN environment variable is empty")
 	}
 
-	// Open database menggunakan stdlib adapter
-	db := stdlib.OpenDB(*config)
-
-	// Test connection
-	err = db.Ping()
-	if err != nil {
-		return nil, err
+	// Jika format key-value, konversi ke format yang pgx bisa pahami
+	if strings.Contains(connStr, "host=") && !strings.Contains(connStr, "postgres://") {
+		// Format sudah benar untuk pgx, langsung pakai
+		log.Println("Using key-value connection string format")
+	} else if strings.HasPrefix(connStr, "postgres://") {
+		log.Println("Using URL connection string format")
+	} else {
+		return nil, fmt.Errorf("invalid connection string format")
 	}
 
-	// Set connection pool settings
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(3 * time.Hour) // opsional
+	// Open connection
+	db, err := sql.Open("pgx", connStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
 
-	log.Println("Database connected successfully")
+	// Test connection dengan timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	// Set connection pool untuk Supabase
+	db.SetMaxOpenConns(10) // Supabase free tier max 20 connections
+	db.SetMaxIdleConns(5)  // Keep 5 idle connections
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+
+	log.Println("✅ Database connected successfully to Supabase")
 	return db, nil
 }
